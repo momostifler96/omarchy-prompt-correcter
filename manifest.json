@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "momoledev.prompt-correcter",
+  "name": "Prompt Corrector",
+  "version": "1.1.0",
+  "author": "momoledev",
+  "license": "MIT",
+  "description": "Correction de texte et amélioration de prompts via une API LLM compatible OpenAI. Deux modes : Message (corriger simplement) et Prompt (corriger & restructurer). Entièrement configurable : base URL, clé API, modèle, température, prompts système.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Prompt Corrector",
+    "description": "Corrige un message ou restructure un prompt avec une IA (icône ✍ dans la barre).",
+    "category": "IA",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

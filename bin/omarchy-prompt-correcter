@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# omarchy-prompt-correcter — corrige un message ou restructure un prompt
+# à partir du texte sélectionné (sélection primaire Wayland) ou du
+# presse-papiers, via une API LLM compatible OpenAI.
+#
+# Usage :
+#   omarchy-prompt-correcter [message|prompt] [--paste]
+#
+# Modes :
+#   message   corrige simplement (orthographe, grammaire) [défaut]
+#   prompt    corrige et restructure en un prompt clair et efficace
+#
+# Options :
+#   --paste   colle le résultat dans la fenêtre active (via wtype)
+#   -h, --help  affiche cette aide
+#
+# Config : ~/.config/omarchy/prompt-correcter.json
+#          (surchargeable par la variable PROMPT_CORRECTER_CONFIG)
+set -euo pipefail
+
+CFG="${PROMPT_CORRECTER_CONFIG:-$HOME/.config/omarchy/prompt-correcter.json}"
+MODE="message"
+PASTE=0
+for arg in "$@"; do
+  case "$arg" in
+    message)   MODE="message" ;;
+    prompt)    MODE="prompt" ;;
+    --paste)   PASTE=1 ;;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Option inconnue : $arg (voir --help)" >&2; exit 1 ;;
+  esac
+done
+
+fail() {
+  notify-send -a "Prompt Corrector" -u critical "Prompt Corrector" "$1" 2>/dev/null \
+    || echo "Prompt Corrector : $1" >&2
+  exit 1
+}
+
+[ -f "$CFG" ] || fail "Config introuvable : $CFG"
+
+# Texte : sélection primaire, sinon presse-papiers
+text=$(wl-paste -p --no-newline 2>/dev/null || true)
+if [ -z "${text//[[:space:]]/}" ]; then
+  text=$(wl-paste --no-newline 2>/dev/null || true)
+fi
+[ -n "${text//[[:space:]]/}" ] || fail "Aucun texte sélectionné ni dans le presse-papiers."
+
+jget() { jq -r "$1" "$CFG" 2>/dev/null || true; }
+base=$(jget '.baseUrl // empty')
+key=$(jget '.apiKey // empty')
+model=$(jget '.model // empty')
+temp=$(jget '.temperature // 0.3')
+case "$temp" in ''|*[!0-9.]*) temp=0.3 ;; esac
+lang=$(jget '.language // "auto"')
+if [ -z "$lang" ] || [ "$lang" = "null" ]; then lang="auto"; fi
+if [ "$MODE" = "prompt" ]; then
+  sys=$(jget '.systemPromptRestructure // empty')
+else
+  sys=$(jget '.systemPromptMessage // empty')
+fi
+[ -n "$base" ] && [ -n "$model" ] || fail "Config incomplète : baseUrl et model requis dans $CFG"
+
+case "$lang" in
+  auto) ;;
+  *) sys=$(printf '%s\n%s' "$sys" "Langue de sortie impérative : $lang. Réponds entièrement dans cette langue, quelle que soit celle du texte d'origine.") ;;
+esac
+
+url="${base%/}/chat/completions"
+payload=$(jq -n --arg model "$model" --argjson temp "$temp" --arg sys "$sys" --arg user "$text" \
+  '{model:$model,temperature:$temp,messages:[{role:"system",content:$sys},{role:"user",content:$user}]}')
+
+curl_args=(-sS --max-time 180 -X POST "$url" -H "Content-Type: application/json" -d "$payload")
+[ -n "$key" ] && curl_args+=(-H "Authorization: Bearer $key")
+resp=$(curl "${curl_args[@]}") || fail "Appel API impossible ($url)."
+
+result=$(printf '%s' "$resp" | jq -r '.choices[0].message.content // .error.message // empty' 2>/dev/null || true)
+[ -n "$result" ] || fail "Réponse API illisible : ${resp:0:200}"
+# Trim
+result="${result#"${result%%[![:space:]]*}"}"
+result="${result%"${result##*[![:space:]]}"}"
+
+printf '%s' "$result" | wl-copy
+if [ "$PASTE" -eq 1 ] && command -v wtype >/dev/null 2>&1; then
+  sleep 0.3
+  if printf '%s' "$result" | wtype - 2>/dev/null; then
+    notify-send -a "Prompt Corrector" "Prompt Corrector" "✓ Collé dans la fenêtre active"
+  else
+    notify-send -a "Prompt Corrector" "Prompt Corrector" "✓ Copié — colle avec Ctrl+V"
+  fi
+else
+  notify-send -a "Prompt Corrector" "Prompt Corrector" "✓ Copié — colle avec Ctrl+V"
+fi
